@@ -1,0 +1,85 @@
+import axios from "axios";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+const api = axios.create({
+    baseURL: API_URL,
+});
+
+// Attach JWT token to requests
+api.interceptors.request.use((config) => {
+    if (typeof window !== "undefined") {
+        const token = localStorage.getItem("salc_token");
+        if (token) {
+            config.headers.Authorization = `Bearer ${token}`;
+        }
+    }
+    return config;
+});
+
+// Handle 401 globally
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error.response?.status === 401 && typeof window !== "undefined") {
+            localStorage.removeItem("salc_token");
+            localStorage.removeItem("salc_user");
+            window.location.href = "/login";
+        }
+        return Promise.reject(error);
+    }
+);
+
+export const authAPI = {
+    register: (email: string, password: string) =>
+        api.post("/api/auth/register", { email, password }),
+    login: (email: string, password: string) =>
+        api.post("/api/auth/login", { email, password }),
+    me: () => api.get("/api/auth/me"),
+};
+
+export const lecturesAPI = {
+    list: () => api.get("/api/lectures"),
+    get: (id: string) => api.get(`/api/lectures/${id}`),
+    upload: (formData: FormData) =>
+        api.post("/api/lectures/upload", formData, {
+            headers: { "Content-Type": "multipart/form-data" },
+            timeout: 300000,
+        }),
+    delete: (id: string) => api.delete(`/api/lectures/${id}`),
+};
+
+export const chatAPI = {
+    ask: (lectureId: string, question: string) =>
+        api.post(`/api/lectures/${lectureId}/chat`, { question }),
+};
+
+export const analysisAPI = {
+    summary: (lectureId: string, formatType: string = "detailed") =>
+        api.post("/api/analysis/summary", { lecture_id: lectureId, format_type: formatType }),
+    notes: (lectureId: string) =>
+        api.post("/api/analysis/notes", { lecture_id: lectureId }),
+    keywords: (lectureId: string) =>
+        api.post("/api/analysis/keywords", { lecture_id: lectureId }),
+    questions: (lectureId: string, formatType: string = "mixed") =>
+        api.post("/api/analysis/questions", { lecture_id: lectureId, format_type: formatType }),
+    topics: (lectureId: string) =>
+        api.post("/api/analysis/topics", { lecture_id: lectureId }),
+    highlights: (lectureId: string) =>
+        api.post("/api/analysis/highlights", { lecture_id: lectureId }),
+    translate: (lectureId: string, content: string, targetLanguage: string) =>
+        api.post("/api/analysis/translate", { lecture_id: lectureId, content, target_language: targetLanguage }),
+};
+
+export const exportAPI = {
+    pdf: (lectureId: string) =>
+        api.post("/api/export/pdf", { lecture_id: lectureId }, { responseType: "blob" }),
+    markdown: (lectureId: string) =>
+        api.post("/api/export/markdown", { lecture_id: lectureId }, { responseType: "blob" }),
+    txt: (lectureId: string) =>
+        api.post("/api/export/txt", { lecture_id: lectureId }, { responseType: "blob" }),
+    json: (lectureId: string) =>
+        api.post("/api/export/json", { lecture_id: lectureId }, { responseType: "blob" }),
+};
+
+export default api;

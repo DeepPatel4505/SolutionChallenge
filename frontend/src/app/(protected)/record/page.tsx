@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { lecturesAPI } from "@/lib/api";
-import { Mic, Play, Pause, Square, RotateCcw, ArrowUpFromLine, Upload } from "lucide-react";
+import { lecturesAPI, organizationsAPI, groupsAPI } from "@/lib/api";
+import { Mic, Play, Pause, Square, RotateCcw, ArrowUpFromLine, Upload, Building2, Users } from "lucide-react";
 
 export default function RecordPage() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const [title, setTitle] = useState("");
     const [recording, setRecording] = useState(false);
     const [paused, setPaused] = useState(false);
@@ -16,6 +17,11 @@ export default function RecordPage() {
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState("");
     const [bars, setBars] = useState<number[]>(Array(30).fill(4));
+    const [organizations, setOrganizations] = useState<any[]>([]);
+    const [groups, setGroups] = useState<any[]>([]);
+    const [selectedOrgId, setSelectedOrgId] = useState("");
+    const [selectedGroupId, setSelectedGroupId] = useState("");
+    const [contextApplied, setContextApplied] = useState(false);
 
     const mediaRecorder = useRef<MediaRecorder | null>(null);
     const audioChunks = useRef<Blob[]>([]);
@@ -28,6 +34,65 @@ export default function RecordPage() {
         const sec = s % 60;
         return `${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
     };
+
+    useEffect(() => {
+        const initializeContext = async () => {
+            if (contextApplied) return;
+
+            try {
+                const res = await organizationsAPI.list();
+                const orgs = Array.isArray(res.data) ? res.data : [];
+                setOrganizations(orgs);
+
+                const queryOrgId = searchParams.get("orgId") || "";
+                const queryGroupId = searchParams.get("groupId") || "";
+
+                if (queryOrgId && orgs.some((org) => org.id === queryOrgId)) {
+                    setSelectedOrgId(queryOrgId);
+                    if (queryGroupId) {
+                        const groupRes = await groupsAPI.listByOrg(queryOrgId);
+                        const orgGroups = Array.isArray(groupRes.data) ? groupRes.data : [];
+                        setGroups(orgGroups);
+                        if (orgGroups.some((group) => group.id === queryGroupId)) {
+                            setSelectedGroupId(queryGroupId);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to initialize recording context", err);
+            } finally {
+                setContextApplied(true);
+            }
+        };
+
+        initializeContext();
+    }, [contextApplied, searchParams]);
+
+    useEffect(() => {
+        const fetchGroups = async () => {
+            if (!selectedOrgId) {
+                setGroups([]);
+                setSelectedGroupId("");
+                return;
+            }
+
+            try {
+                const res = await groupsAPI.listByOrg(selectedOrgId);
+                const nextGroups = Array.isArray(res.data) ? res.data : [];
+                setGroups(nextGroups);
+                if (selectedGroupId && !nextGroups.some((g) => g.id === selectedGroupId)) {
+                    setSelectedGroupId("");
+                }
+            } catch (err) {
+                console.error("Failed to fetch groups for recording", err);
+                setGroups([]);
+            }
+        };
+
+        if (contextApplied) {
+            fetchGroups();
+        }
+    }, [selectedOrgId, contextApplied, selectedGroupId]);
 
     const startRecording = async () => {
         try {
@@ -101,6 +166,8 @@ export default function RecordPage() {
             const formData = new FormData();
             formData.append("title", title.trim());
             formData.append("audio", file);
+            if (selectedOrgId) formData.append("org_id", selectedOrgId);
+            if (selectedGroupId) formData.append("group_id", selectedGroupId);
             const response = await lecturesAPI.upload(formData);
             router.push(`/lecture/${response.data.id}`);
         } catch (err: unknown) {
@@ -120,14 +187,46 @@ export default function RecordPage() {
     return (
         <div>
             <div className="page-header">
-                <h1 className="page-title">Record Meeting</h1>
-                <p className="page-subtitle">Capture internal meeting audio for transcription, summaries, and action items</p>
+                <div>
+                    <h1 className="page-title">Record Meeting</h1>
+                    <p className="page-subtitle">Capture internal meeting audio for transcription, summaries, and action items</p>
+                </div>
             </div>
 
-            <div className="card" style={{ maxWidth: "580px", textAlign: "center" }}>
+            <div className="card" style={{ maxWidth: "580px", textAlign: "center", margin: "0 auto" }}>
                 <div className="form-group" style={{ marginBottom: "24px", textAlign: "left" }}>
                     <label className="form-label">Meeting Title</label>
                     <input className="input" type="text" placeholder="e.g. Product Sync - Q2 Planning" value={title} onChange={(e) => setTitle(e.target.value)} />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px", textAlign: "left" }}>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label"><Building2 size={14} style={{ display: "inline", verticalAlign: "-2px", marginRight: "4px" }} /> Workspace (Personal if none)</label>
+                        <select
+                            className="input"
+                            value={selectedOrgId}
+                            onChange={(e) => setSelectedOrgId(e.target.value)}
+                        >
+                            <option value="">Personal Space</option>
+                            {organizations.map((org) => (
+                                <option key={org.id} value={org.id}>{org.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label"><Users size={14} style={{ display: "inline", verticalAlign: "-2px", marginRight: "4px" }} /> Team (Optional)</label>
+                        <select
+                            className="input"
+                            value={selectedGroupId}
+                            onChange={(e) => setSelectedGroupId(e.target.value)}
+                            disabled={!selectedOrgId}
+                        >
+                            <option value="">All Teams (Visible to whole workspace)</option>
+                            {groups.map((group) => (
+                                <option key={group.id} value={group.id}>{group.name}</option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
 
                 <div className="record-timer">{formatTime(seconds)}</div>
@@ -166,6 +265,10 @@ export default function RecordPage() {
 
                 {recording && <p style={{ color: "var(--danger-400)", fontSize: "0.82rem", marginTop: "16px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>{paused ? <><Pause size={14} /> Paused</> : <><span className="badge-dot" style={{ width: 8, height: 8, borderRadius: "50%", background: "#ef4444", animation: "recording-pulse 1.5s infinite", display: "inline-block" }} /> Recording...</>}</p>}
                 {error && <div className="alert alert-error" style={{ marginTop: "16px" }}>{error}</div>}
+
+                <div style={{ marginTop: "10px", color: "var(--text-muted)", fontSize: "0.82rem", textAlign: "left" }}>
+                    Storage scope: {selectedOrgId ? (selectedGroupId ? "Specific team" : "Workspace-wide (all teams)") : "Personal space"}
+                </div>
 
                 <div style={{ marginTop: "24px", color: "var(--text-muted)", fontSize: "0.85rem" }}>
                     Or <Link href="/upload" style={{ color: "var(--primary-400)" }}><Upload size={13} style={{ display: "inline", verticalAlign: "-2px" }} /> upload a file instead</Link>

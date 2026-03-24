@@ -39,7 +39,8 @@ export const authAPI = {
 };
 
 export const lecturesAPI = {
-    list: () => api.get("/api/lectures"),
+    list: (org_id?: string, group_id?: string) => 
+        api.get("/api/lectures", { params: { org_id, group_id } }),
     get: (id: string) => api.get(`/api/lectures/${id}`),
     upload: (formData: FormData) =>
         api.post("/api/lectures/upload", formData, {
@@ -47,6 +48,31 @@ export const lecturesAPI = {
             timeout: 300000,
         }),
     delete: (id: string) => api.delete(`/api/lectures/${id}`),
+};
+
+export const organizationsAPI = {
+    list: () => api.get("/api/organizations"),
+    create: (name: string) => api.post("/api/organizations", { name }),
+    delete: (orgId: string) => api.delete(`/api/organizations/${orgId}`),
+    getMembers: (orgId: string) => api.get(`/api/organizations/${orgId}/members`),
+    getRole: (orgId: string) => api.get(`/api/organizations/${orgId}/role`),
+    invite: (orgId: string, email: string, role: string = "member") =>
+        api.post(`/api/organizations/${orgId}/invite`, { email, role }),
+    removeMember: (orgId: string, userId: string) =>
+        api.delete(`/api/organizations/${orgId}/members/${userId}`),
+};
+
+export const groupsAPI = {
+    listByOrg: (orgId: string) => api.get(`/api/groups/org/${orgId}`),
+    get: (groupId: string) => api.get(`/api/groups/${groupId}`),
+    delete: (groupId: string) => api.delete(`/api/groups/${groupId}`),
+    getMembers: (groupId: string) => api.get(`/api/groups/${groupId}/members`),
+    create: (org_id: string, name: string, description?: string) =>
+        api.post("/api/groups", { org_id, name, description }),
+    addMember: (groupId: string, userId: string, role: string = "member") =>
+        api.post(`/api/groups/${groupId}/members`, { user_id: userId, role }),
+    removeMember: (groupId: string, userId: string) =>
+        api.delete(`/api/groups/${groupId}/members/${userId}`),
 };
 
 export const chatAPI = {

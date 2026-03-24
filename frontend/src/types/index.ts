@@ -1,7 +1,16 @@
 export interface User {
     id: string;
     email: string;
+    role?: AppRole;
     created_at?: string;
+}
+
+export type AppRole = "owner" | "admin" | "member";
+
+export interface WorkspaceSummary {
+    id: string;
+    name: string;
+    my_role?: AppRole;
 }
 
 export interface AuthResponse {
@@ -35,6 +44,8 @@ export interface Lecture {
     summary_text?: string;
     status: string;
     created_at?: string;
+    org_id?: string;
+    group_id?: string;
 }
 
 export interface ChatMessage {

@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, lectures, chat, analysis, export
+from app.routers import auth, lectures, chat, analysis, export, organizations, groups
 import os
 
 app = FastAPI(
@@ -40,6 +40,8 @@ app.include_router(lectures.router)
 app.include_router(chat.router)
 app.include_router(analysis.router)
 app.include_router(export.router)
+app.include_router(organizations.router)
+app.include_router(groups.router)
 
 
 @app.get("/")

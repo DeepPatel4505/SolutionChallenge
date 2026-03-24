@@ -1,22 +1,107 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { lecturesAPI } from "@/lib/api";
-import { Mic, FileText, CheckCircle2, FolderOpen, Upload, ArrowUpFromLine } from "lucide-react";
+import { Mic, FileText, CheckCircle2, FolderOpen, Upload, ArrowUpFromLine, Building2, Users } from "lucide-react";
+import { organizationsAPI, groupsAPI } from "@/lib/api";
 
 type UploadMode = "media" | "document";
 
 export default function UploadPage() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const fileRef = useRef<HTMLInputElement>(null);
+    const formRef = useRef<HTMLFormElement>(null);
     const [mode, setMode] = useState<UploadMode>("media");
     const [title, setTitle] = useState("");
     const [file, setFile] = useState<File | null>(null);
     const [dragActive, setDragActive] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState("");
+    const [organizations, setOrganizations] = useState<any[]>([]);
+    const [groups, setGroups] = useState<any[]>([]);
+    const [selectedOrgId, setSelectedOrgId] = useState("");
+    const [selectedGroupId, setSelectedGroupId] = useState("");
+    const [contextApplied, setContextApplied] = useState(false);
+
+    // Initialize org and group from query params
+    useEffect(() => {
+        const initializeContext = async () => {
+            if (contextApplied) return;
+            
+            try {
+                const res = await organizationsAPI.list();
+                const orgs = Array.isArray(res.data) ? res.data : [];
+                setOrganizations(orgs);
+
+                const queryOrgId = searchParams.get("orgId") || "";
+                const queryGroupId = searchParams.get("groupId") || "";
+
+                // Set organization
+                if (queryOrgId && orgs.some((org) => org.id === queryOrgId)) {
+                    setSelectedOrgId(queryOrgId);
+                    
+                    // Fetch and set group if provided
+                    if (queryGroupId) {
+                        try {
+                            const groupRes = await groupsAPI.listByOrg(queryOrgId);
+                            const orgGroups = Array.isArray(groupRes.data) ? groupRes.data : [];
+                            setGroups(orgGroups);
+                            if (orgGroups.some((group) => group.id === queryGroupId)) {
+                                setSelectedGroupId(queryGroupId);
+                            }
+                        } catch (err) {
+                            console.error("Failed to fetch groups", err);
+                        }
+                    }
+                }
+                
+                setContextApplied(true);
+            } catch (err) {
+                console.error("Failed to fetch organizations", err);
+                setContextApplied(true);
+            }
+        };
+        
+        initializeContext();
+    }, []);
+
+    // Fetch groups when org changes (but preserve group selection if valid)
+    useEffect(() => {
+        const fetchGroups = async () => {
+            if (selectedOrgId) {
+                try {
+                    const res = await groupsAPI.listByOrg(selectedOrgId);
+                    const newGroups = Array.isArray(res.data) ? res.data : [];
+                    setGroups(newGroups);
+                    
+                    // Only clear the group if it's not in the new org's group list
+                    if (selectedGroupId && !newGroups.some((g) => g.id === selectedGroupId)) {
+                        setSelectedGroupId("");
+                    }
+                } catch (err) {
+                    console.error("Failed to fetch groups", err);
+                    setGroups([]);
+                }
+            } else {
+                setGroups([]);
+                setSelectedGroupId("");
+            }
+        };
+        
+        if (contextApplied) {
+            fetchGroups();
+        }
+    }, [selectedOrgId, contextApplied]);
+
+    // Auto-focus form when at least title is ready
+    useEffect(() => {
+        if (contextApplied && formRef.current) {
+            formRef.current.querySelector<HTMLInputElement>(".form-label")?.parentElement?.querySelector("input")?.focus();
+        }
+    }, [contextApplied]);
 
     const isValidForMode = useCallback((f: File, selectedMode: UploadMode) => {
         const name = (f.name || "").toLowerCase();
@@ -66,6 +151,8 @@ export default function UploadPage() {
             const formData = new FormData();
             formData.append("title", title.trim());
             formData.append("audio", file);
+            if (selectedOrgId) formData.append("org_id", selectedOrgId);
+            if (selectedGroupId) formData.append("group_id", selectedGroupId);
             const response = await lecturesAPI.upload(formData);
             router.push(`/lecture/${response.data.id}`);
         } catch (err: unknown) {
@@ -78,11 +165,13 @@ export default function UploadPage() {
     return (
         <div>
             <div className="page-header">
-                <h1 className="page-title">Upload Knowledge</h1>
-                <p className="page-subtitle">Choose upload type: Audio/Video or Document (PDF/DOCX/PPTX)</p>
+                <div>
+                    <h1 className="page-title">Upload Knowledge</h1>
+                    <p className="page-subtitle">Choose upload type: Audio/Video or Document (PDF/DOCX/PPTX)</p>
+                </div>
             </div>
 
-            <div className="card" style={{ maxWidth: "640px" }}>
+            <div className="card" style={{ maxWidth: "640px", margin: "0 auto" }}>
                 <div style={{ marginBottom: "20px" }}>
                     <label className="form-label" style={{ marginBottom: "10px" }}>Upload Type</label>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
@@ -120,10 +209,40 @@ export default function UploadPage() {
                     </p>
                 </div>
 
-                <form onSubmit={handleUpload}>
+                <form ref={formRef} onSubmit={handleUpload}>
                     <div className="form-group" style={{ marginBottom: "20px" }}>
                         <label className="form-label">Knowledge Item Title</label>
                         <input className="input" type="text" placeholder="e.g. Q2 Roadmap Review / Sales Playbook" value={title} onChange={(e) => setTitle(e.target.value)} required />
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px" }}>
+                        <div className="form-group">
+                            <label className="form-label"><Building2 size={14} style={{ display: "inline", verticalAlign: "-2px", marginRight: "4px" }} /> Workspace (Personal if none)</label>
+                            <select 
+                                className="input" 
+                                value={selectedOrgId} 
+                                onChange={(e) => setSelectedOrgId(e.target.value)}
+                            >
+                                <option value="">Personal Space</option>
+                                {organizations.map(org => (
+                                    <option key={org.id} value={org.id}>{org.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label"><Users size={14} style={{ display: "inline", verticalAlign: "-2px", marginRight: "4px" }} /> Team (Optional)</label>
+                            <select 
+                                className="input" 
+                                value={selectedGroupId} 
+                                onChange={(e) => setSelectedGroupId(e.target.value)}
+                                disabled={!selectedOrgId}
+                            >
+                                <option value="">All Teams (Visible to whole workspace)</option>
+                                {groups.map(group => (
+                                    <option key={group.id} value={group.id}>{group.name}</option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
 
                     <div

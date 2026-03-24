@@ -97,6 +97,8 @@ export default function GroupDetailsPage() {
     const [deletingTeam, setDeletingTeam] = useState(false);
     const [activeView, setActiveView] = useState<"activity" | "members">("activity");
     const [activityDateFilter, setActivityDateFilter] = useState("");
+    const [showDeleteMemberModal, setShowDeleteMemberModal] = useState(false);
+    const [memberToDeleteId, setMemberToDeleteId] = useState<string | null>(null);
     const activityDateInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -196,8 +198,15 @@ export default function GroupDetailsPage() {
     };
 
     const handleRemoveMember = async (userId: string) => {
-        if (!confirm("Remove this member from the team?")) return;
+        setMemberToDeleteId(userId);
+        setShowDeleteMemberModal(true);
+    };
 
+    const confirmRemoveMember = async () => {
+        if (!memberToDeleteId) return;
+        
+        const userId = memberToDeleteId;
+        setShowDeleteMemberModal(false);
         setRemovingUserId(userId);
         setError("");
         setSuccess("");
@@ -206,12 +215,18 @@ export default function GroupDetailsPage() {
             await groupsAPI.removeMember(groupId, userId);
             setSuccess("Member removed from team");
             setGroupMembers((prev) => prev.filter((m) => m.user_id !== userId));
+            setMemberToDeleteId(null);
         } catch (err: unknown) {
             const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
             setError(detail || "Failed to remove member");
         } finally {
             setRemovingUserId(null);
         }
+    };
+
+    const cancelRemoveMember = () => {
+        setShowDeleteMemberModal(false);
+        setMemberToDeleteId(null);
     };
 
     const handleDeleteTeam = async () => {
@@ -413,17 +428,20 @@ export default function GroupDetailsPage() {
                                                     {member.joined_at ? formatDateTime(member.joined_at) : "-"}
                                                 </td>
                                                 {canManageMembers && (
-                                                    <td className="text-right">
+                                                    <td style={{ textAlign: "right" }}>
                                                         {canRemoveFromTeam(member.user_id) ? (
                                                             <button
-                                                                className="btn-icon btn-danger-soft"
+                                                                className="btn btn-danger-soft btn-sm"
                                                                 onClick={() => handleRemoveMember(member.user_id)}
                                                                 disabled={removingUserId === member.user_id}
+                                                                title="Remove this member from the team"
+                                                                style={{ display: "flex", alignItems: "center", gap: "6px" }}
                                                             >
-                                                                <Trash2 size={14} />
+                                                                <Trash2 size={16} />
+                                                                Remove
                                                             </button>
                                                         ) : (
-                                                            <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>Protected</span>
+                                                            <span style={{ fontSize: "0.85rem", color: "#94a3b8", padding: "4px 12px" }}>⚠️ Protected</span>
                                                         )}
                                                     </td>
                                                 )}
@@ -550,6 +568,42 @@ export default function GroupDetailsPage() {
                                 disabled={deletingTeam}
                             >
                                 {deletingTeam ? "Deleting..." : "Delete Team"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showDeleteMemberModal && memberToDeleteId && (
+                <div className="modal-overlay">
+                    <div className="modal-content" style={{ maxWidth: "420px" }}>
+                        <div className="modal-header">
+                            <h2 className="modal-title">Remove Member</h2>
+                            <button className="modal-close" onClick={cancelRemoveMember}>
+                                &times;
+                            </button>
+                        </div>
+                        <div className="modal-body" style={{ padding: "16px 24px", marginBottom: "16px" }}>
+                            <p style={{ margin: 0, color: "#e2e8f0" }}>
+                                Are you sure you want to remove this member from the team? They will lose access to all team lectures and resources.
+                            </p>
+                        </div>
+                        <div className="modal-footer">
+                            <button
+                                type="button"
+                                className="btn btn-ghost"
+                                onClick={cancelRemoveMember}
+                                disabled={removingUserId === memberToDeleteId}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-danger"
+                                onClick={confirmRemoveMember}
+                                disabled={removingUserId === memberToDeleteId}
+                            >
+                                {removingUserId === memberToDeleteId ? "Removing..." : "Remove Member"}
                             </button>
                         </div>
                     </div>

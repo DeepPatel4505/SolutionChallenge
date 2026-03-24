@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { lecturesAPI, analysisAPI, chatAPI, exportAPI } from "@/lib/api";
-import { Lecture, TranscriptData, ChatMessage } from "@/types";
+import { Lecture, TranscriptData, ChatMessage, ActionTask, ActionPlanJson, ActionPlanSectionResponse } from "@/types";
+import TeamSuggestionModal from "@/components/TeamSuggestionModal";
 import ReactMarkdown from "react-markdown";
 import {
     FileText, BarChart3, BookOpen, Key, HelpCircle, Layers, Zap, MessageSquare,
@@ -211,6 +212,7 @@ function TranslateBar({
 // ── Tabs ──
 const TABS = [
     { key: "transcript", label: "Transcript", icon: FileText },
+    { key: "action_plan", label: "Action Plan", icon: Target },
     { key: "summary", label: "Summary", icon: BarChart3 },
     { key: "notes", label: "Notes", icon: BookOpen },
     { key: "keywords", label: "Keywords", icon: Key },
@@ -234,6 +236,14 @@ const QUESTION_TYPES = [
     { key: "long", label: "Long Answer", desc: "5 detailed questions", icon: FileText, color: "#a855f7" },
     { key: "flashcards", label: "Flashcards", desc: "15 study cards", icon: FlipHorizontal, color: "#ec4899" },
     { key: "mixed", label: "Full Test", desc: "Complete practice test", icon: ListChecks, color: "#10b981" },
+];
+
+const ACTION_PLAN_SECTIONS = [
+    { key: "tasks", label: "Tasks" },
+    { key: "timeline", label: "Timeline" },
+    { key: "dependencies", label: "Dependencies" },
+    { key: "team_breakdown", label: "Team Breakdown" },
+    { key: "markdown", label: "Markdown" },
 ];
 
 export default function LectureDetailPage() {
@@ -265,6 +275,18 @@ export default function LectureDetailPage() {
     const [exportOpen, setExportOpen] = useState(false);
     const [exportLoading, setExportLoading] = useState<string | null>(null);
 
+    const [showTeamSuggestions, setShowTeamSuggestions] = useState(false);
+    const [teamSharePromptOpened, setTeamSharePromptOpened] = useState(false);
+
+    const [actionPlanSubTab, setActionPlanSubTab] = useState("tasks");
+    const [actionPlanLoading, setActionPlanLoading] = useState<string | null>(null);
+    const [actionPlanInitialized, setActionPlanInitialized] = useState(false);
+    const [actionPlanError, setActionPlanError] = useState("");
+    const [actionPlanFullJson, setActionPlanFullJson] = useState<ActionPlanJson | null>(null);
+    const [actionPlanSections, setActionPlanSections] = useState<Record<string, ActionPlanSectionResponse>>({});
+
+    const teamPromptHandledKey = `team_share_prompt_handled_${lectureId}`;
+
     const fetchLecture = useCallback(async () => {
         try { const res = await lecturesAPI.get(lectureId); setLecture(res.data); }
         catch { setError("Failed to load knowledge item"); } finally { setLoading(false); }
@@ -278,6 +300,25 @@ export default function LectureDetailPage() {
             return () => clearInterval(interval);
         }
     }, [lecture, fetchLecture]);
+
+    // Auto-open share modal only when coming from upload flow (?share=1).
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const shouldPromptFromUpload = searchParams.get("share") === "1";
+        if (!shouldPromptFromUpload) return;
+
+        const alreadyHandled = localStorage.getItem(teamPromptHandledKey) === "1";
+
+        if (
+            lecture?.status === "completed" &&
+            lecture?.org_id &&
+            !teamSharePromptOpened &&
+            !alreadyHandled
+        ) {
+            setShowTeamSuggestions(true);
+            setTeamSharePromptOpened(true);
+        }
+    }, [lecture?.status, lecture?.org_id, teamSharePromptOpened, teamPromptHandledKey, searchParams]);
 
     useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -334,6 +375,7 @@ export default function LectureDetailPage() {
 
     useEffect(() => {
         if (!lecture?.transcript_text) return;
+        if (activeTab === "action_plan") return;
         if (activeTab === "summary") fetchAnalysis("summary", summaryFormat);
         if (activeTab === "notes") fetchAnalysis("notes");
         if (activeTab === "keywords") fetchAnalysis("keywords");
@@ -342,6 +384,96 @@ export default function LectureDetailPage() {
         if (activeTab === "highlights") fetchAnalysis("highlights");
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab, summaryFormat, questionType, lecture?.transcript_text]);
+
+    const deriveActionPlanSections = useCallback((planJson: ActionPlanJson, markdown: string): Record<string, ActionPlanSectionResponse> => {
+        const tasks = Array.isArray(planJson?.tasks) ? planJson.tasks : [];
+        const timeline = [...tasks]
+            .filter((t) => t.deadline)
+            .sort((a, b) => (a.deadline || "9999-12-31").localeCompare(b.deadline || "9999-12-31"));
+
+        const dependencies: Array<{ task_id: string; task_title: string; depends_on: string }> = [];
+        tasks.forEach((task) => {
+            (task.dependencies || []).forEach((dep) => {
+                dependencies.push({ task_id: task.id, task_title: task.title, depends_on: dep });
+            });
+        });
+
+        const teamBreakdown: Record<string, string[]> = {};
+        tasks.forEach((task) => {
+            const team = task.team || "Unassigned";
+            if (!teamBreakdown[team]) teamBreakdown[team] = [];
+            teamBreakdown[team].push(task.title);
+        });
+
+        return {
+            tasks: { content: "", content_json: tasks, cached: true },
+            timeline: { content: "", content_json: timeline, cached: true },
+            dependencies: { content: "", content_json: dependencies, cached: true },
+            team_breakdown: { content: "", content_json: teamBreakdown, cached: true },
+            markdown: { content: markdown || "", content_json: planJson, cached: true },
+        };
+    }, []);
+
+    const fetchActionPlanFull = useCallback(async (forceRefresh: boolean = false) => {
+        setActionPlanError("");
+        setActionPlanLoading("full");
+        try {
+            const res = await analysisAPI.actionPlan(lectureId, forceRefresh);
+            const payload = (res.data?.content_json || {}) as ActionPlanJson;
+            const markdown = res.data?.content || "";
+            setActionPlanFullJson(payload);
+            setActionPlanSections(deriveActionPlanSections(payload, markdown));
+            setActionPlanInitialized(true);
+        } catch (err: unknown) {
+            const axErr = err as { response?: { data?: { detail?: string } } };
+            setActionPlanError(axErr.response?.data?.detail || "Failed to generate action plan");
+        } finally {
+            setActionPlanLoading(null);
+        }
+    }, [lectureId, deriveActionPlanSections]);
+
+    const fetchActionPlanSection = useCallback(async (section: string) => {
+        if (actionPlanSections[section]) return;
+        setActionPlanError("");
+        setActionPlanLoading(section);
+        try {
+            let res;
+            if (section === "tasks") res = await analysisAPI.actionPlanTasks(lectureId);
+            else if (section === "timeline") res = await analysisAPI.actionPlanTimeline(lectureId);
+            else if (section === "dependencies") res = await analysisAPI.actionPlanDependencies(lectureId);
+            else if (section === "team_breakdown") res = await analysisAPI.actionPlanTeamBreakdown(lectureId);
+            else res = await analysisAPI.actionPlanMarkdown(lectureId);
+
+            setActionPlanSections((prev) => ({
+                ...prev,
+                [section]: {
+                    content: res.data?.content || "",
+                    content_json: res.data?.content_json,
+                    cached: !!res.data?.cached,
+                },
+            }));
+        } catch (err: unknown) {
+            const axErr = err as { response?: { data?: { detail?: string } } };
+            setActionPlanError(axErr.response?.data?.detail || `Failed to load ${section}`);
+        } finally {
+            setActionPlanLoading(null);
+        }
+    }, [lectureId, actionPlanSections]);
+
+    useEffect(() => {
+        if (activeTab !== "action_plan" || !lecture?.transcript_text) return;
+        if (!actionPlanInitialized) {
+            void fetchActionPlanFull(false);
+        }
+    }, [activeTab, lecture?.transcript_text, actionPlanInitialized, fetchActionPlanFull]);
+
+    useEffect(() => {
+        if (activeTab !== "action_plan") return;
+        if (!actionPlanInitialized) return;
+        if (!actionPlanSections[actionPlanSubTab]) {
+            void fetchActionPlanSection(actionPlanSubTab);
+        }
+    }, [activeTab, actionPlanSubTab, actionPlanInitialized, actionPlanSections, fetchActionPlanSection]);
 
     const handleTranslate = async (lang: string) => {
         const currentCacheKey = activeTab === "summary" ? `summary_${summaryFormat}` : activeTab === "questions" ? `questions_${questionType}` : `${activeTab}_default`;
@@ -435,18 +567,28 @@ export default function LectureDetailPage() {
                 </div>
                 <div className="lecture-header-actions">
                     {lecture.status === "completed" && (
-                        <div className="export-dropdown" onClick={(e) => e.stopPropagation()}>
-                            <button className="btn btn-secondary btn-sm" onClick={() => setExportOpen(!exportOpen)}>
-                                {exportLoading ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Download size={14} />} Export
-                            </button>
-                            {exportOpen && (
-                                <div className="export-menu">
-                                    <button className="export-menu-item" onClick={() => handleExport("pdf")}><FileDown size={15} /> PDF</button>
-                                    <button className="export-menu-item" onClick={() => handleExport("markdown")}><FileCode size={15} /> Markdown</button>
-                                    <button className="export-menu-item" onClick={() => handleExport("txt")}><File size={15} /> Text</button>
-                                    <button className="export-menu-item" onClick={() => handleExport("json")}><Database size={15} /> JSON</button>
-                                </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            {lecture.org_id && (
+                                <button
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => setShowTeamSuggestions(true)}
+                                >
+                                    <Users size={14} /> Share Teams
+                                </button>
                             )}
+                            <div className="export-dropdown" onClick={(e) => e.stopPropagation()}>
+                                <button className="btn btn-secondary btn-sm" onClick={() => setExportOpen(!exportOpen)}>
+                                    {exportLoading ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Download size={14} />} Export
+                                </button>
+                                {exportOpen && (
+                                    <div className="export-menu">
+                                        <button className="export-menu-item" onClick={() => handleExport("pdf")}><FileDown size={15} /> PDF</button>
+                                        <button className="export-menu-item" onClick={() => handleExport("markdown")}><FileCode size={15} /> Markdown</button>
+                                        <button className="export-menu-item" onClick={() => handleExport("txt")}><File size={15} /> Text</button>
+                                        <button className="export-menu-item" onClick={() => handleExport("json")}><Database size={15} /> JSON</button>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -539,6 +681,122 @@ export default function LectureDetailPage() {
                                     </div>
                                 ) : (
                                     <div className="transcript-content">{lecture?.transcript_text || "No transcript."}</div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* ACTION PLAN */}
+                        {activeTab === "action_plan" && (
+                            <div className="card" style={{ animation: "scaleIn 0.3s ease" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px", flexWrap: "wrap", gap: "10px" }}>
+                                    <h3 style={{ fontSize: "1rem", fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}><Target size={16} /> Action Plan</h3>
+                                    <button className="btn btn-secondary btn-sm" onClick={() => void fetchActionPlanFull(true)} disabled={actionPlanLoading === "full"}>
+                                        {actionPlanLoading === "full" ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Sparkles size={14} />} Regenerate
+                                    </button>
+                                </div>
+
+                                <div className="sub-tabs" style={{ marginBottom: "12px" }}>
+                                    {ACTION_PLAN_SECTIONS.map((s) => (
+                                        <button key={s.key} className={`sub-tab ${actionPlanSubTab === s.key ? "active" : ""}`} onClick={() => setActionPlanSubTab(s.key)}>{s.label}</button>
+                                    ))}
+                                </div>
+
+                                {actionPlanError && <div className="alert alert-error" style={{ marginBottom: "12px" }}>{actionPlanError}</div>}
+
+                                {actionPlanFullJson?.summary && (
+                                    <div style={{ marginBottom: "12px", padding: "10px 12px", borderRadius: "8px", background: "var(--bg-surface)", color: "var(--text-secondary)", fontSize: "0.86rem" }}>
+                                        <strong>Strategic Summary:</strong> {actionPlanFullJson.summary}
+                                    </div>
+                                )}
+
+                                {actionPlanLoading && actionPlanLoading !== "full" && <AnalysisSkeleton />}
+
+                                {!actionPlanLoading && actionPlanSubTab === "tasks" && (() => {
+                                    const tasks = (actionPlanSections.tasks?.content_json || []) as ActionTask[];
+                                    const grouped: Record<string, ActionTask[]> = { high: [], medium: [], low: [] };
+                                    tasks.forEach((t) => {
+                                        const key = (["high", "medium", "low"].includes(t.priority) ? t.priority : "medium") as "high" | "medium" | "low";
+                                        grouped[key].push(t);
+                                    });
+
+                                    return (
+                                        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "12px" }}>
+                                            {(["high", "medium", "low"] as const).map((p) => (
+                                                <div key={p} style={{ border: "1px solid var(--border-subtle)", borderRadius: "10px", padding: "12px" }}>
+                                                    <h4 style={{ margin: "0 0 10px", textTransform: "capitalize" }}>{p} Priority ({grouped[p].length})</h4>
+                                                    {grouped[p].length === 0 ? (
+                                                        <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.85rem" }}>No tasks.</p>
+                                                    ) : grouped[p].map((t) => (
+                                                        <div key={t.id} style={{ padding: "10px", borderRadius: "8px", background: "var(--bg-surface)", marginBottom: "8px" }}>
+                                                            <div style={{ fontWeight: 600 }}>{t.title}</div>
+                                                            {t.description && <div style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginTop: "4px" }}>{t.description}</div>}
+                                                            <div style={{ fontSize: "0.8rem", marginTop: "6px", color: "var(--text-muted)", display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                                                                <span>Team: {t.team || "Unassigned"}</span>
+                                                                <span>Owner: {t.owner || "TBD"}</span>
+                                                                {t.deadline && <span>Deadline: {t.deadline}</span>}
+                                                                <span>Status: {t.status}</span>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })()}
+
+                                {!actionPlanLoading && actionPlanSubTab === "timeline" && (() => {
+                                    const checkpoints = ([...(actionPlanSections.timeline?.content_json || [])] as ActionTask[])
+                                        .sort((a, b) => (a.deadline || "9999-12-31").localeCompare(b.deadline || "9999-12-31"));
+
+                                    if (!checkpoints.length) {
+                                        return <div className="alert" style={{ background: "var(--bg-surface)", color: "var(--text-muted)" }}>No deadline tasks found. Add deadlines to create timeline checkpoints.</div>;
+                                    }
+
+                                    return (
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                                            {checkpoints.map((cp) => (
+                                                <div key={cp.id} style={{ borderLeft: "3px solid var(--primary-500)", padding: "10px 12px", background: "var(--bg-surface)", borderRadius: "8px" }}>
+                                                    <div style={{ fontSize: "0.8rem", color: "var(--primary-400)", marginBottom: "4px" }}>{cp.deadline}</div>
+                                                    <div style={{ fontWeight: 600 }}>{cp.title}</div>
+                                                    <div style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginTop: "3px" }}>{cp.team} • {cp.status}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })()}
+
+                                {!actionPlanLoading && actionPlanSubTab === "dependencies" && (() => {
+                                    const deps = (actionPlanSections.dependencies?.content_json || []) as Array<{ task_id: string; task_title: string; depends_on: string }>;
+                                    if (!deps.length) return <div className="alert" style={{ background: "var(--bg-surface)", color: "var(--text-muted)" }}>No explicit dependencies listed.</div>;
+                                    return (
+                                        <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                                            {deps.map((d, idx) => (
+                                                <li key={`${d.task_id}-${idx}`} style={{ marginBottom: "8px" }}><strong>{d.task_title}</strong> depends on {d.depends_on}</li>
+                                            ))}
+                                        </ul>
+                                    );
+                                })()}
+
+                                {!actionPlanLoading && actionPlanSubTab === "team_breakdown" && (() => {
+                                    const map = (actionPlanSections.team_breakdown?.content_json || {}) as Record<string, string[]>;
+                                    const entries = Object.entries(map);
+                                    if (!entries.length) return <div className="alert" style={{ background: "var(--bg-surface)", color: "var(--text-muted)" }}>No team mappings available.</div>;
+                                    return (
+                                        <div style={{ display: "grid", gap: "10px" }}>
+                                            {entries.map(([team, titles]) => (
+                                                <div key={team} style={{ border: "1px solid var(--border-subtle)", borderRadius: "10px", padding: "10px" }}>
+                                                    <h4 style={{ margin: "0 0 8px" }}>{team}</h4>
+                                                    <ul style={{ margin: 0, paddingLeft: "18px" }}>
+                                                        {titles.map((title, idx) => <li key={`${team}-${idx}`}>{title}</li>)}
+                                                    </ul>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })()}
+
+                                {!actionPlanLoading && actionPlanSubTab === "markdown" && (
+                                    <MarkdownRenderer content={actionPlanSections.markdown?.content || "No markdown available."} />
                                 )}
                             </div>
                         )}
@@ -715,6 +973,26 @@ export default function LectureDetailPage() {
                     </div>
                 </>
             )}
+
+            {/* Team Suggestion Modal */}
+            <TeamSuggestionModal
+                lectureId={lectureId}
+                orgId={lecture?.org_id}
+                isOpen={showTeamSuggestions}
+                onClose={() => {
+                    setShowTeamSuggestions(false);
+                    if (typeof window !== "undefined") {
+                        localStorage.setItem(teamPromptHandledKey, "1");
+                    }
+                }}
+                onConfirm={(selectedTeamIds) => {
+                    console.log("Teams selected for sharing:", selectedTeamIds);
+                    if (typeof window !== "undefined") {
+                        localStorage.setItem(teamPromptHandledKey, "1");
+                    }
+                    void fetchLecture();
+                }}
+            />
         </div>
     );
 }

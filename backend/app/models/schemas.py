@@ -63,3 +63,9 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[str] = []
+
+
+# ── Team Sharing ──
+
+class TeamShareRequest(BaseModel):
+    team_ids: list[str]

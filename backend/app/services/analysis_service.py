@@ -2,6 +2,9 @@ import httpx
 from app.config import GROQ_API_KEY
 import asyncio
 import tiktoken
+import json
+import re
+from datetime import datetime
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.1-8b-instant"
@@ -316,3 +319,338 @@ Rules:
 
     user = f"Translate the following to {lang_name}:\n\n{content}"
     return await safe_groq_call(system, user, max_tokens=4096) or ""
+
+
+def _extract_json_payload(raw: str) -> dict:
+    """Extract best-effort JSON object from LLM output."""
+    if not raw:
+        return {}
+
+    text = raw.strip()
+
+    fence_match = re.search(r"```(?:json)?\s*(\{[\s\S]*\})\s*```", text, flags=re.IGNORECASE)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = text[start:end + 1]
+        try:
+            data = json.loads(candidate)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    return {}
+
+
+def _normalize_date(value: str) -> str:
+    if not value:
+        return ""
+    v = str(value).strip()
+    if not v:
+        return ""
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).date().isoformat()
+    except Exception:
+        return v
+
+
+def _normalize_task(task: dict, index: int) -> dict:
+    if not isinstance(task, dict):
+        task = {}
+
+    priority = str(task.get("priority", "medium")).lower().strip()
+    if priority not in ["high", "medium", "low"]:
+        priority = "medium"
+
+    status = str(task.get("status", "todo")).lower().strip()
+    if status not in ["todo", "in_progress", "blocked", "done"]:
+        status = "todo"
+
+    dependencies = task.get("dependencies", [])
+    if not isinstance(dependencies, list):
+        dependencies = []
+
+    title = str(task.get("title", "")).strip() or f"Task {index}"
+
+    return {
+        "id": str(task.get("id", f"task_{index}")).strip() or f"task_{index}",
+        "title": title,
+        "description": str(task.get("description", "")).strip(),
+        "team": str(task.get("team", "Unassigned")).strip() or "Unassigned",
+        "owner": str(task.get("owner", "")).strip() or "TBD",
+        "priority": priority,
+        "deadline": _normalize_date(str(task.get("deadline", "")).strip()),
+        "status": status,
+        "dependencies": [str(dep).strip() for dep in dependencies if str(dep).strip()],
+    }
+
+
+def normalize_action_plan_payload(payload: dict) -> dict:
+    """Normalize to strict, UI-ready schema."""
+    if not isinstance(payload, dict):
+        payload = {}
+
+    raw_tasks = payload.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        raw_tasks = []
+
+    tasks = [_normalize_task(t, i + 1) for i, t in enumerate(raw_tasks)]
+
+    teams = payload.get("teams", {})
+    if not isinstance(teams, dict):
+        teams = {}
+
+    # Ensure every referenced team exists in teams mapping.
+    team_map = {str(k): str(v) for k, v in teams.items()}
+    for task in tasks:
+        if task["team"] not in team_map:
+            team_map[task["team"]] = f"Tasks owned by {task['team']}"
+
+    return {
+        "summary": str(payload.get("summary", "")).strip(),
+        "tasks": tasks,
+        "teams": team_map,
+    }
+
+
+def build_action_plan_sections(content_json: dict, markdown: str) -> dict:
+    tasks = content_json.get("tasks", []) if isinstance(content_json, dict) else []
+
+    def sort_key(task: dict):
+        deadline = task.get("deadline") or "9999-12-31"
+        return deadline
+
+    timeline = sorted([t for t in tasks if t.get("deadline")], key=sort_key)
+
+    dependencies = []
+    for t in tasks:
+        for dep in t.get("dependencies", []):
+            dependencies.append({
+                "task_id": t.get("id"),
+                "task_title": t.get("title"),
+                "depends_on": dep,
+            })
+
+    team_breakdown = {}
+    for t in tasks:
+        team = t.get("team", "Unassigned")
+        team_breakdown.setdefault(team, []).append(t.get("title", "Untitled task"))
+
+    tasks_md_lines = ["## Tasks"]
+    if not tasks:
+        tasks_md_lines.append("No tasks found.")
+    else:
+        for t in tasks:
+            extra = []
+            if t.get("deadline"):
+                extra.append(f"deadline: {t['deadline']}")
+            extra.append(f"status: {t.get('status', 'todo')}")
+            tasks_md_lines.append(f"- **{t.get('title', 'Task')}** ({', '.join(extra)})")
+            if t.get("description"):
+                tasks_md_lines.append(f"  - {t['description']}")
+
+    timeline_md_lines = ["## Timeline"]
+    if not timeline:
+        timeline_md_lines.append("No deadline-based checkpoints available.")
+    else:
+        for t in timeline:
+            timeline_md_lines.append(f"- {t.get('deadline')}: **{t.get('title')}**")
+
+    dep_md_lines = ["## Dependencies"]
+    if not dependencies:
+        dep_md_lines.append("No explicit dependencies.")
+    else:
+        for d in dependencies:
+            dep_md_lines.append(f"- **{d['task_title']}** depends on `{d['depends_on']}`")
+
+    team_md_lines = ["## Team Breakdown"]
+    if not team_breakdown:
+        team_md_lines.append("No team assignment found.")
+    else:
+        for team, titles in team_breakdown.items():
+            team_md_lines.append(f"### {team}")
+            for title in titles:
+                team_md_lines.append(f"- {title}")
+
+    return {
+        "tasks": {
+            "content": "\n".join(tasks_md_lines),
+            "content_json": tasks,
+        },
+        "timeline": {
+            "content": "\n".join(timeline_md_lines),
+            "content_json": timeline,
+        },
+        "dependencies": {
+            "content": "\n".join(dep_md_lines),
+            "content_json": dependencies,
+        },
+        "team_breakdown": {
+            "content": "\n".join(team_md_lines),
+            "content_json": team_breakdown,
+        },
+        "markdown": {
+            "content": markdown,
+            "content_json": content_json,
+        },
+    }
+
+
+async def generate_lecture_action_plan(transcript: str, summary: str = "", highlights: str = "") -> tuple[str, dict]:
+    """
+    Generate a lecture-level action plan with both markdown and strict JSON.
+    Uses summary/highlights first for token efficiency and falls back to transcript context.
+    """
+    system = """You are an expert PM assistant creating execution-ready action plans.
+Return valid JSON only, no prose outside JSON.
+"""
+
+    user = f"""
+Generate an action plan from this lecture context.
+
+Preferred input (token-efficient):
+SUMMARY:
+{summary[:7000]}
+
+HIGHLIGHTS:
+{highlights[:7000]}
+
+TRANSCRIPT CONTEXT:
+{transcript[:12000]}
+
+Return strictly JSON with schema:
+{{
+  "summary": "short strategic summary",
+  "tasks": [
+    {{
+      "id": "task_1",
+      "title": "",
+      "description": "",
+      "team": "",
+      "owner": "",
+      "priority": "high|medium|low",
+      "deadline": "YYYY-MM-DD or empty",
+      "status": "todo|in_progress|blocked|done",
+      "dependencies": ["task_2"]
+    }}
+  ],
+  "teams": {{ "Team Name": "what this team owns" }}
+}}
+"""
+
+    raw = await safe_groq_call(system, user, max_tokens=3072)
+    payload = _extract_json_payload(raw)
+    normalized = normalize_action_plan_payload(payload)
+
+    sections = build_action_plan_sections(normalized, "")
+    markdown = "\n\n".join([
+        "# Action Plan",
+        f"## Summary\n{normalized.get('summary') or 'No summary provided.'}",
+        sections["tasks"]["content"],
+        sections["dependencies"]["content"],
+        sections["team_breakdown"]["content"],
+        sections["timeline"]["content"],
+    ])
+
+    return markdown, normalized
+
+
+def aggregate_workspace_action_plan(lecture_plans: list[dict]) -> tuple[str, dict]:
+    """Aggregate lecture plans into workspace strategic plan with deduped tasks."""
+    dedup: dict[str, dict] = {}
+
+    for plan in lecture_plans:
+        for task in plan.get("tasks", []):
+            key = re.sub(r"\s+", " ", task.get("title", "").strip().lower())
+            if not key:
+                continue
+            if key not in dedup:
+                dedup[key] = task
+
+    tasks = list(dedup.values())
+    tasks.sort(key=lambda t: (t.get("deadline") or "9999-12-31", t.get("priority") or "medium"))
+
+    dependencies = []
+    for t in tasks:
+        for dep in t.get("dependencies", []):
+            dependencies.append({
+                "task_id": t.get("id"),
+                "task_title": t.get("title"),
+                "depends_on": dep,
+            })
+
+    teams = {}
+    for t in tasks:
+        team = t.get("team", "Unassigned")
+        teams.setdefault(team, []).append(t.get("title", "Untitled task"))
+
+    timeline = [t for t in tasks if t.get("deadline")]
+    timeline.sort(key=lambda t: t.get("deadline"))
+
+    risks = []
+    blocked = [t for t in tasks if t.get("status") == "blocked"]
+    if blocked:
+        risks.append(f"{len(blocked)} blocked task(s) need escalation.")
+    if not timeline:
+        risks.append("No dated milestones found; execution timeline is ambiguous.")
+
+    content_json = {
+        "summary": f"Aggregated action plan from {len(lecture_plans)} lecture plan(s).",
+        "tasks": tasks,
+        "dependencies": dependencies,
+        "risks": risks,
+        "timeline": timeline,
+        "teams": teams,
+    }
+
+    md_lines = [
+        "# Workspace Action Plan",
+        f"## Strategic Summary\n{content_json['summary']}",
+        "## Priority Tasks",
+    ]
+    if not tasks:
+        md_lines.append("No tasks available.")
+    else:
+        for t in tasks:
+            md_lines.append(f"- **{t.get('title')}** [{t.get('priority', 'medium')}] ({t.get('team', 'Unassigned')})")
+
+    md_lines.append("## Dependencies")
+    if not dependencies:
+        md_lines.append("No explicit dependencies.")
+    else:
+        for d in dependencies:
+            md_lines.append(f"- **{d['task_title']}** depends on `{d['depends_on']}`")
+
+    md_lines.append("## Risks")
+    if not risks:
+        md_lines.append("No major risks flagged.")
+    else:
+        for r in risks:
+            md_lines.append(f"- {r}")
+
+    md_lines.append("## Timeline")
+    if not timeline:
+        md_lines.append("No deadline-based checkpoints.")
+    else:
+        for t in timeline:
+            md_lines.append(f"- {t.get('deadline')}: {t.get('title')}")
+
+    md_lines.append("## Team Breakdown")
+    if not teams:
+        md_lines.append("No team mappings available.")
+    else:
+        for team, titles in teams.items():
+            md_lines.append(f"### {team}")
+            for title in titles:
+                md_lines.append(f"- {title}")
+
+    return "\n".join(md_lines), content_json

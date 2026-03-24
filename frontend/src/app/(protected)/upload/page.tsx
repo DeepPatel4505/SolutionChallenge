@@ -196,8 +196,9 @@ export default function UploadPage() {
             if (selectedGroupId) confirmData.append("group_id", selectedGroupId);
             await lecturesAPI.confirmupload(confirmData);
 
-            // redirect
-            router.push(`/lecture/${lecture_id}`);
+            // If uploaded into a workspace, prompt team sharing in the immediate post-upload flow.
+            const shouldPromptShare = !!selectedOrgId;
+            router.push(shouldPromptShare ? `/lecture/${lecture_id}?share=1` : `/lecture/${lecture_id}`);
         } catch (err: any) {
             setError(err?.message || "Upload failed");
             setUploading(false);

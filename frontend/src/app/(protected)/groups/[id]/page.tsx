@@ -147,7 +147,7 @@ export default function GroupDetailsPage() {
     const memberUserIds = new Set(groupMembers.map((m) => m.user_id));
     const availableOrgMembers = orgMembers
         .filter((m) => !memberUserIds.has(m.user_id))
-        .filter((m) => m.role !== "owner" && m.role !== "admin")
+        .filter((m) => m.role !== "owner")
         .filter((m) => (orgRoleFilter === "all" ? true : m.role === orgRoleFilter))
         .filter((m) => {
             const query = memberSearch.trim().toLowerCase();
@@ -441,7 +441,7 @@ export default function GroupDetailsPage() {
                                                                 Remove
                                                             </button>
                                                         ) : (
-                                                            <span style={{ fontSize: "0.85rem", color: "#94a3b8", padding: "4px 12px" }}>⚠️ Protected</span>
+                                                            <span style={{ fontSize: "0.85rem", color: "#94a3b8", padding: "4px 12px" }}>Protected</span>
                                                         )}
                                                     </td>
                                                 )}
@@ -482,6 +482,7 @@ export default function GroupDetailsPage() {
                                     onChange={(e) => setOrgRoleFilter(e.target.value as "all" | "owner" | "admin" | "member")}
                                 >
                                     <option value="all">All Roles</option>
+                                    <option value="admin">Admin</option>
                                     <option value="member">Member</option>
                                 </select>
                             </div>

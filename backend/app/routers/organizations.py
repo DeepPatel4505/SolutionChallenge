@@ -42,8 +42,8 @@ async def get_my_org_role(org_id: str, current_user: dict = Depends(get_current_
 @router.post("/{org_id}/invite", response_model=dict)
 async def invite_member(org_id: str, req: InviteMemberRequest, current_user: dict = Depends(get_current_user)):
     role = await OrganizationService.get_role(org_id, current_user["user_id"])
-    if role not in ["owner", "admin"]:
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    if role != "owner":
+        raise HTTPException(status_code=403, detail="Only workspace owner can invite members")
     
     try:
         return await OrganizationService.invite_member(org_id, req.email, req.role)
@@ -53,8 +53,8 @@ async def invite_member(org_id: str, req: InviteMemberRequest, current_user: dic
 @router.delete("/{org_id}/members/{user_id}", response_model=dict)
 async def remove_member(org_id: str, user_id: str, current_user: dict = Depends(get_current_user)):
     actor_role = await OrganizationService.get_role(org_id, current_user["user_id"])
-    if actor_role not in ["owner", "admin"]:
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    if actor_role != "owner":
+        raise HTTPException(status_code=403, detail="Only workspace owner can remove members")
 
     target_role = await OrganizationService.get_role(org_id, user_id)
     if not target_role:
@@ -63,10 +63,6 @@ async def remove_member(org_id: str, user_id: str, current_user: dict = Depends(
     if target_role == "owner":
         raise HTTPException(status_code=403, detail="Owner cannot be removed")
 
-    # Admins can remove only members. Owners can remove admins and members.
-    if actor_role == "admin" and target_role == "admin":
-        raise HTTPException(status_code=403, detail="Admin cannot remove another admin")
-    
     await OrganizationService.remove_member(org_id, user_id)
     return {"message": "Member removed successfully"}
 

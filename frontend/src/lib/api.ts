@@ -43,6 +43,9 @@ export const lecturesAPI = {
     list: (org_id?: string, group_id?: string) => 
         api.get("/api/lectures", { params: { org_id, group_id } }),
     get: (id: string) => api.get(`/api/lectures/${id}`),
+    suggestTeams: (id: string) => api.get(`/api/lectures/${id}/suggest-teams`),
+    shareTeams: (id: string, team_ids: string[]) =>
+        api.put(`/api/lectures/${id}/share-teams`, { team_ids }),
     upload: (formData: FormData) =>
         api.post("/api/lectures/upload", formData, {
             headers: { "Content-Type": "multipart/form-data" },
@@ -113,6 +116,27 @@ export const analysisAPI = {
             lecture_id: lectureId,
             content,
             target_language: targetLanguage,
+        }),
+    actionPlan: (lectureId: string, forceRefresh: boolean = false) =>
+        api.post("/api/analysis/action-plan", {
+            lecture_id: lectureId,
+            force_refresh: forceRefresh,
+        }),
+    actionPlanTasks: (lectureId: string) =>
+        api.post("/api/analysis/action-plan/tasks", { lecture_id: lectureId }),
+    actionPlanTimeline: (lectureId: string) =>
+        api.post("/api/analysis/action-plan/timeline", { lecture_id: lectureId }),
+    actionPlanDependencies: (lectureId: string) =>
+        api.post("/api/analysis/action-plan/dependencies", { lecture_id: lectureId }),
+    actionPlanTeamBreakdown: (lectureId: string) =>
+        api.post("/api/analysis/action-plan/team-breakdown", { lecture_id: lectureId }),
+    actionPlanMarkdown: (lectureId: string) =>
+        api.post("/api/analysis/action-plan/markdown", { lecture_id: lectureId }),
+    workspaceActionPlan: (orgId: string, groupId?: string, forceRefresh: boolean = false) =>
+        api.post("/api/analysis/workspace-action-plan", {
+            org_id: orgId,
+            group_id: groupId,
+            force_refresh: forceRefresh,
         }),
 };
 

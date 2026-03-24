@@ -102,6 +102,31 @@ class OrganizationService:
             raise ValueError("User not found")
         
         user_id = user_result.data[0]["id"]
+
+        # If already in workspace, update role (owner can promote member -> admin).
+        existing = (
+            supabase.table("org_members")
+            .select("id, role")
+            .eq("org_id", org_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        if existing.data:
+            current_role = existing.data[0].get("role")
+            if current_role == "owner":
+                raise ValueError("Cannot change owner role")
+
+            updated = (
+                supabase.table("org_members")
+                .update({"role": role})
+                .eq("org_id", org_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if not updated.data:
+                raise ValueError("Failed to update member role")
+            return updated.data[0]
         
         # Add to organization
         result = supabase.table("org_members").insert({

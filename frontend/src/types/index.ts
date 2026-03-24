@@ -60,3 +60,27 @@ export interface AnalysisResponse {
     content: string;
     analysis_type: string;
 }
+
+export interface ActionTask {
+    id: string;
+    title: string;
+    description: string;
+    team: string;
+    owner: string;
+    priority: "high" | "medium" | "low";
+    deadline: string;
+    status: "todo" | "in_progress" | "blocked" | "done";
+    dependencies: string[];
+}
+
+export interface ActionPlanJson {
+    summary: string;
+    tasks: ActionTask[];
+    teams: Record<string, string>;
+}
+
+export interface ActionPlanSectionResponse {
+    content: string;
+    content_json: any;
+    cached: boolean;
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { lecturesAPI, analysisAPI, chatAPI, exportAPI } from "@/lib/api";
 import { Lecture, TranscriptData, ChatMessage } from "@/types";
 import ReactMarkdown from "react-markdown";
@@ -14,9 +14,9 @@ import {
 
 // ── Helpers ──
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, isDocument }: { status: string; isDocument?: boolean }) {
     const labels: Record<string, string> = {
-        uploading: "Uploading", transcribing: "Transcribing", summarizing: "Summarizing",
+        uploading: "Uploading", transcribing: isDocument ? "Extracting Text" : "Transcribing", summarizing: "Summarizing",
         processing_rag: "Building Q&A", completed: "Completed", failed: "Failed",
     };
     const isProcessing = !["completed", "failed"].includes(status);
@@ -31,6 +31,22 @@ function formatTimestamp(sec: number) {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
     return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+const DOCUMENT_EXTENSIONS = new Set(["pdf", "docx", "pptx"]);
+
+function getFileExtensionFromUrl(fileUrl?: string | null): string | null {
+    if (!fileUrl) return null;
+
+    try {
+        const pathname = new URL(fileUrl).pathname;
+        const filename = pathname.split("/").pop() || "";
+        const dotIdx = filename.lastIndexOf(".");
+        if (dotIdx === -1 || dotIdx === filename.length - 1) return null;
+        return filename.slice(dotIdx + 1).toLowerCase();
+    } catch {
+        return null;
+    }
 }
 
 function MarkdownRenderer({ content }: { content: string }) {
@@ -223,6 +239,7 @@ const QUESTION_TYPES = [
 export default function LectureDetailPage() {
     const params = useParams();
     const router = useRouter();
+    const searchParams = useSearchParams();
     const lectureId = params.id as string;
 
     const [lecture, setLecture] = useState<Lecture | null>(null);
@@ -268,11 +285,27 @@ export default function LectureDetailPage() {
         ? (() => { try { return JSON.parse(lecture.transcript_json); } catch { return null; } })()
         : null;
 
+    const isDocumentLecture = useMemo(() => {
+        const fileExt = getFileExtensionFromUrl(lecture?.audio_url);
+        if (fileExt && DOCUMENT_EXTENSIONS.has(fileExt)) return true;
+
+        // Fallback: documents do not produce diarized transcript_json in this pipeline.
+        return !!lecture?.transcript_text && !lecture?.transcript_json;
+    }, [lecture?.audio_url, lecture?.transcript_text, lecture?.transcript_json]);
+
     const availableTabs = TABS.filter((tab) => {
         if (tab.key === "transcript") return !!lecture?.transcript_text;
         if (tab.key === "chat") return lecture?.status === "completed";
         return !!lecture?.transcript_text;
     });
+
+    useEffect(() => {
+        const requestedTab = searchParams.get("tab");
+        if (!requestedTab) return;
+        if (!TABS.some((tab) => tab.key === requestedTab)) return;
+        if (requestedTab === "chat" && lecture?.status !== "completed") return;
+        setActiveTab(requestedTab);
+    }, [searchParams, lecture?.status]);
 
     useEffect(() => { setActiveTranslation(null); }, [activeTab, summaryFormat, questionType]);
 
@@ -386,7 +419,7 @@ export default function LectureDetailPage() {
                     <button className="btn btn-ghost btn-sm" onClick={() => router.push("/dashboard")} style={{ marginBottom: "8px" }}><ArrowLeft size={14} /> Back to Dashboard</button>
                     <h1 className="page-title" style={{ fontSize: "1.6rem" }}>{lecture.title}</h1>
                     <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "10px", flexWrap: "wrap" }}>
-                        <StatusBadge status={lecture.status} />
+                        <StatusBadge status={lecture.status} isDocument={isDocumentLecture} />
                         {lecture.created_at && <span style={{ fontSize: "0.82rem", color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: 4 }}><Calendar size={13} /> {new Date(lecture.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>}
                         {transcriptData && (
                             <>
@@ -427,7 +460,13 @@ export default function LectureDetailPage() {
                         <div>
                             <h4 style={{ marginBottom: "4px", fontSize: "0.95rem" }}>
                                 {lecture.status === "uploading" && <><Upload size={15} style={{ display: "inline", verticalAlign: "-2px" }} /> Uploading your file...</>}
-                                {lecture.status === "transcribing" && <><Mic size={15} style={{ display: "inline", verticalAlign: "-2px" }} /> Transcribing with Deepgram AI...</>}
+                                {lecture.status === "transcribing" && (
+                                    <>
+                                        {isDocumentLecture
+                                            ? <><FileText size={15} style={{ display: "inline", verticalAlign: "-2px" }} /> Extracting text from document...</>
+                                            : <><Mic size={15} style={{ display: "inline", verticalAlign: "-2px" }} /> Transcribing with Deepgram AI...</>}
+                                    </>
+                                )}
                                 {lecture.status === "summarizing" && <><FileEdit size={15} style={{ display: "inline", verticalAlign: "-2px" }} /> Generating summary with Groq AI...</>}
                                 {lecture.status === "processing_rag" && <><Brain size={15} style={{ display: "inline", verticalAlign: "-2px" }} /> Building Q&A knowledge index...</>}
                             </h4>
@@ -436,7 +475,7 @@ export default function LectureDetailPage() {
                     </div>
                     <div className="processing-stages" style={{ marginTop: "18px" }}>
                         {[
-                            { key: "transcribing", label: "Transcribe", done: !!lecture.transcript_text },
+                            { key: "transcribing", label: isDocumentLecture ? "Extract Text" : "Transcribe", done: !!lecture.transcript_text },
                             { key: "summarizing", label: "Summarize", done: !!lecture.summary_text },
                             { key: "processing_rag", label: "Q&A Index", done: lecture.status === "completed" },
                         ].map((step, i) => (

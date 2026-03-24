@@ -3,6 +3,8 @@ node_modules/
 .npm
 .nvm
 .yarn/
+.venv/
+
 
 # Next.js build output
 .next/

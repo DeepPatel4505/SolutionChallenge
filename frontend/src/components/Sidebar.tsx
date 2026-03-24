@@ -2,30 +2,68 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
-import { LayoutDashboard, Upload, Mic, BarChart3, LogOut, Menu, X } from "lucide-react";
+import { useState, useEffect, type ComponentType } from "react";
+import { LayoutDashboard, Upload, Mic, BarChart3, LogOut, Menu, X, Building2, Users, Sparkles } from "lucide-react";
+import { organizationsAPI } from "@/lib/api";
+import { AppRole, WorkspaceSummary } from "@/types";
 
-const navLinks = [
-    { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
-    { href: "/upload", icon: Upload, label: "Upload Knowledge" },
-    { href: "/record", icon: Mic, label: "Record Meeting" },
-    { href: "/analytics", icon: BarChart3, label: "Knowledge Analytics" },
+interface SidebarLink {
+    href: string;
+    icon: ComponentType<{ size?: number }>;
+    label: string;
+    isVisible: (ctx: { hasWorkspace: boolean }) => boolean;
+}
+
+const navLinks: SidebarLink[] = [
+    { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard", isVisible: () => true },
+    { href: "/organizations", icon: Building2, label: "Workspaces", isVisible: () => true },
+    { href: "/groups", icon: Users, label: "Teams", isVisible: ({ hasWorkspace }) => hasWorkspace },
+    { href: "/analytics", icon: BarChart3, label: "Analytics", isVisible: () => true },
 ];
 
 export default function Sidebar() {
     const pathname = usePathname();
     const router = useRouter();
     const [isOpen, setIsOpen] = useState(false);
-    const [userEmail, setUserEmail] = useState("");
+    const [userEmail] = useState(() => {
+        if (typeof window === "undefined") return "";
+        const storedUser = localStorage.getItem("salc_user");
+        if (!storedUser) return "";
+        try {
+            const parsed = JSON.parse(storedUser) as { email?: string };
+            return parsed.email || "";
+        } catch {
+            return "";
+        }
+    });
+    const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+
+    const hasWorkspace = workspaces.length > 0;
+    const hasManageRole = workspaces.some((workspace) => workspace.my_role === "owner" || workspace.my_role === "admin");
+    const primaryRole: AppRole | null = workspaces.some((workspace) => workspace.my_role === "owner")
+        ? "owner"
+        : workspaces.some((workspace) => workspace.my_role === "admin")
+            ? "admin"
+            : workspaces.some((workspace) => workspace.my_role === "member")
+                ? "member"
+                : null;
 
     useEffect(() => {
-        const email = localStorage.getItem("user_email") || "";
-        setUserEmail(email);
+        const fetchWorkspaces = async () => {
+            try {
+                const res = await organizationsAPI.list();
+                setWorkspaces(Array.isArray(res.data) ? res.data : []);
+            } catch {
+                setWorkspaces([]);
+            }
+        };
+
+        fetchWorkspaces();
     }, []);
 
     const handleLogout = () => {
-        localStorage.removeItem("token");
-        localStorage.removeItem("user_email");
+        localStorage.removeItem("salc_token");
+        localStorage.removeItem("salc_user");
         router.push("/login");
     };
 
@@ -38,11 +76,30 @@ export default function Sidebar() {
             <div className={`sidebar-overlay ${isOpen ? "open" : ""}`} onClick={() => setIsOpen(false)} />
 
             <aside className={`sidebar ${isOpen ? "open" : ""}`}>
-                <div className="sidebar-logo">KnowledgeFlow</div>
+                <div className="sidebar-logo">TeamSage</div>
+
+                <div className="sidebar-context">
+                    {hasWorkspace ? (
+                        <>
+                            <div className="sidebar-context-label">Workspace Access</div>
+                            <div className="sidebar-context-value">{workspaces.length} linked</div>
+                            {primaryRole && (
+                                <span className={`sidebar-role-pill role-${primaryRole}`}>
+                                    {primaryRole.toUpperCase()}
+                                </span>
+                            )}
+                        </>
+                    ) : (
+                        <>
+                            <div className="sidebar-context-label">Workspace Access</div>
+                            <div className="sidebar-context-value">Personal mode</div>
+                        </>
+                    )}
+                </div>
 
                 <nav className="sidebar-nav">
                     <div className="sidebar-section-title">Main</div>
-                    {navLinks.map((link) => {
+                    {navLinks.filter((link) => link.isVisible({ hasWorkspace })).map((link) => {
                         const Icon = link.icon;
                         return (
                             <Link
@@ -56,9 +113,34 @@ export default function Sidebar() {
                             </Link>
                         );
                     })}
+
+                    <div className="sidebar-divider" />
+                    <div className="sidebar-section-title">Quick Create</div>
+                    <Link
+                        href="/upload"
+                        className={`sidebar-link sidebar-link-subtle ${pathname === "/upload" ? "active" : ""}`}
+                        onClick={() => setIsOpen(false)}
+                    >
+                        <span className="sidebar-link-icon"><Upload size={18} /></span>
+                        Upload Knowledge
+                    </Link>
+                    <Link
+                        href="/record"
+                        className={`sidebar-link sidebar-link-subtle ${pathname === "/record" ? "active" : ""}`}
+                        onClick={() => setIsOpen(false)}
+                    >
+                        <span className="sidebar-link-icon"><Mic size={18} /></span>
+                        Record Meeting
+                    </Link>
                 </nav>
 
                 <div className="sidebar-footer">
+                    {!hasWorkspace && (
+                        <div className="sidebar-footer-tip">Create a workspace to unlock Teams.</div>
+                    )}
+                    {hasWorkspace && hasManageRole && (
+                        <div className="sidebar-footer-tip sidebar-footer-tip-accent"><Sparkles size={12} /> Manage-enabled workspace access</div>
+                    )}
                     {userEmail && (
                         <div className="sidebar-user" style={{ marginBottom: "12px" }}>
                             <div className="sidebar-avatar">{userEmail[0]?.toUpperCase()}</div>

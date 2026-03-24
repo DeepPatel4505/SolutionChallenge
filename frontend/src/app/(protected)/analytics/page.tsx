@@ -55,8 +55,10 @@ export default function AnalyticsPage() {
     return (
         <div>
             <div className="page-header">
-                <h1 className="page-title">Analytics</h1>
-                <p className="page-subtitle">Track knowledge processing, meeting intelligence, and content statistics</p>
+                <div>
+                    <h1 className="page-title">Analytics</h1>
+                    <p className="page-subtitle">Track knowledge processing, meeting intelligence, and content statistics</p>
+                </div>
             </div>
 
             <div className="dashboard-stats">

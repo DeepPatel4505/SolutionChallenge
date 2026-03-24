@@ -38,6 +38,8 @@ class LectureResponse(BaseModel):
     transcript_json: Optional[str] = None
     summary_text: Optional[str] = None
     status: str
+    org_id: Optional[str] = None
+    group_id: Optional[str] = None
     created_at: Optional[str] = None
 
     class Config:

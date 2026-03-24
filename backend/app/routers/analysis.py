@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import Optional
 from app.middleware.auth_middleware import get_current_user
 from app.services.supabase_client import get_supabase
+from app.services.organization_service import OrganizationService
+from app.services.group_service import GroupService
 from app.services.analysis_service import (
     generate_summary,
     generate_notes,
@@ -33,12 +35,44 @@ class AnalysisResponse(BaseModel):
     cached: bool = False
 
 
+async def _can_access_lecture(lecture: dict, user_id: str) -> bool:
+    """
+    Access model:
+    - Personal lecture (no org_id): only uploader can access.
+    - Workspace lecture (org_id, no group_id): any workspace member can access.
+    - Team lecture (org_id + group_id): team members, org admins, and org owner can access.
+    """
+    owner_id = lecture.get("user_id")
+    org_id = lecture.get("org_id")
+    group_id = lecture.get("group_id")
+
+    # Personal content remains private to creator.
+    if not org_id:
+        return owner_id == user_id
+
+    org_role = await OrganizationService.get_role(org_id, user_id)
+    if not org_role:
+        return False
+
+    # Workspace-wide lecture is visible to all workspace members.
+    if not group_id:
+        return True
+
+    # Org owner/admin can always access team lectures.
+    if org_role in ["owner", "admin"]:
+        return True
+
+    # Members need explicit team membership for team-scoped lectures.
+    group_role = await GroupService.get_group_role(group_id, user_id)
+    return bool(group_role)
+
+
 async def _get_transcript(lecture_id: str, user_id: str) -> str:
-    """Get transcript for a lecture, verify ownership."""
+    """Get transcript for a lecture, verify access."""
     supabase = get_supabase()
     result = (
         supabase.table("lectures")
-        .select("transcript_text, user_id, status")
+        .select("transcript_text, user_id, status, org_id, group_id")
         .eq("id", lecture_id)
         .execute()
     )
@@ -46,7 +80,8 @@ async def _get_transcript(lecture_id: str, user_id: str) -> str:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lecture not found")
 
     lecture = result.data[0]
-    if lecture["user_id"] != user_id:
+    can_access = await _can_access_lecture(lecture, user_id)
+    if not can_access:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
 
     if not lecture.get("transcript_text"):
@@ -169,15 +204,20 @@ async def get_highlights(req: AnalysisRequest, current_user: dict = Depends(get_
 @router.post("/translate", response_model=AnalysisResponse)
 async def translate(req: TranslateRequest, current_user: dict = Depends(get_current_user)):
     """Translate analysis content to another language (cached in DB)."""
-    # Verify lecture ownership
+    # Verify lecture access
     supabase = get_supabase()
     result = (
         supabase.table("lectures")
-        .select("user_id")
+        .select("user_id, org_id, group_id")
         .eq("id", req.lecture_id)
         .execute()
     )
-    if not result.data or result.data[0]["user_id"] != current_user["user_id"]:
+    if not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lecture not found")
+    
+    lecture = result.data[0]
+    can_access = await _can_access_lecture(lecture, current_user["user_id"])
+    if not can_access:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
 
     # Build a stable cache key from content hash + language

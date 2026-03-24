@@ -192,6 +192,8 @@ export default function UploadPage() {
             const confirmData = new FormData();
             confirmData.append("lecture_id", lecture_id);
             confirmData.append("path", path);
+            if (selectedOrgId) confirmData.append("org_id", selectedOrgId);
+            if (selectedGroupId) confirmData.append("group_id", selectedGroupId);
             await lecturesAPI.confirmupload(confirmData);
 
             // redirect

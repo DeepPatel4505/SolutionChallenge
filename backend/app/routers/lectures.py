@@ -214,6 +214,8 @@ async def upload_lecture(
 async def get_upload_url(
     title: str = Form(...),
     filename: str = Form(...),
+    org_id: Optional[str] = Form(None),
+    group_id: Optional[str] = Form(None),
     current_user: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
@@ -223,6 +225,8 @@ async def get_upload_url(
         "user_id": current_user["user_id"],
         "title": title,
         "status": "uploading",
+        "org_id": org_id,
+        "group_id": group_id,
     }).execute()
 
     lecture = lecture_result.data[0]
@@ -247,6 +251,8 @@ async def confirm_upload(
     current_user: dict = Depends(get_current_user),
     lecture_id: str = Form(...),
     path: str = Form(...),
+    org_id: Optional[str] = Form(None),
+    group_id: Optional[str] = Form(None),
 ):
     supabase = get_supabase()
 
@@ -254,10 +260,16 @@ async def confirm_upload(
     audio_url = supabase.storage.from_("lecture-audio").get_public_url(path)
 
     # Update lecture
-    supabase.table("lectures").update({
+    update_data = {
         "audio_url": audio_url,
         "status": "transcribing",
-    }).eq("id", lecture_id).execute()
+    }
+    if org_id:
+        update_data["org_id"] = org_id
+    if group_id:
+        update_data["group_id"] = group_id
+    
+    supabase.table("lectures").update(update_data).eq("id", lecture_id).execute()
 
     # Start processing
     background_tasks.add_task(_process_lecture, lecture_id, audio_url, path.split(".")[-1])

@@ -1,4 +1,5 @@
 import axios from "axios";
+import { url } from "inspector/promises";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -27,7 +28,7 @@ api.interceptors.response.use(
             window.location.href = "/login";
         }
         return Promise.reject(error);
-    }
+    },
 );
 
 export const authAPI = {
@@ -47,6 +48,14 @@ export const lecturesAPI = {
             timeout: 300000,
         }),
     delete: (id: string) => api.delete(`/api/lectures/${id}`),
+    uploadurl: (formData: FormData) =>
+        api.post("/api/lectures/upload-url", formData, {
+            headers: { "Content-Type": "multipart/form-data" },
+        }),
+    confirmupload: (formData: FormData) =>
+        api.post("/api/lectures/confirm-upload", formData, {
+            headers: { "Content-Type": "multipart/form-data" },
+        }),
 };
 
 export const chatAPI = {
@@ -56,30 +65,56 @@ export const chatAPI = {
 
 export const analysisAPI = {
     summary: (lectureId: string, formatType: string = "detailed") =>
-        api.post("/api/analysis/summary", { lecture_id: lectureId, format_type: formatType }),
+        api.post("/api/analysis/summary", {
+            lecture_id: lectureId,
+            format_type: formatType,
+        }),
     notes: (lectureId: string) =>
         api.post("/api/analysis/notes", { lecture_id: lectureId }),
     keywords: (lectureId: string) =>
         api.post("/api/analysis/keywords", { lecture_id: lectureId }),
     questions: (lectureId: string, formatType: string = "mixed") =>
-        api.post("/api/analysis/questions", { lecture_id: lectureId, format_type: formatType }),
+        api.post("/api/analysis/questions", {
+            lecture_id: lectureId,
+            format_type: formatType,
+        }),
     topics: (lectureId: string) =>
         api.post("/api/analysis/topics", { lecture_id: lectureId }),
     highlights: (lectureId: string) =>
         api.post("/api/analysis/highlights", { lecture_id: lectureId }),
     translate: (lectureId: string, content: string, targetLanguage: string) =>
-        api.post("/api/analysis/translate", { lecture_id: lectureId, content, target_language: targetLanguage }),
+        api.post("/api/analysis/translate", {
+            lecture_id: lectureId,
+            content,
+            target_language: targetLanguage,
+        }),
 };
 
 export const exportAPI = {
     pdf: (lectureId: string) =>
-        api.post("/api/export/pdf", { lecture_id: lectureId }, { responseType: "blob" }),
+        api.post(
+            "/api/export/pdf",
+            { lecture_id: lectureId },
+            { responseType: "blob" },
+        ),
     markdown: (lectureId: string) =>
-        api.post("/api/export/markdown", { lecture_id: lectureId }, { responseType: "blob" }),
+        api.post(
+            "/api/export/markdown",
+            { lecture_id: lectureId },
+            { responseType: "blob" },
+        ),
     txt: (lectureId: string) =>
-        api.post("/api/export/txt", { lecture_id: lectureId }, { responseType: "blob" }),
+        api.post(
+            "/api/export/txt",
+            { lecture_id: lectureId },
+            { responseType: "blob" },
+        ),
     json: (lectureId: string) =>
-        api.post("/api/export/json", { lecture_id: lectureId }, { responseType: "blob" }),
+        api.post(
+            "/api/export/json",
+            { lecture_id: lectureId },
+            { responseType: "blob" },
+        ),
 };
 
 export default api;

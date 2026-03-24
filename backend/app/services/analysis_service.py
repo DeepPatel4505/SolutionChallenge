@@ -1,9 +1,73 @@
 import httpx
 from app.config import GROQ_API_KEY
+import asyncio
+import tiktoken
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama-3.1-8b-instant"
 
+# --------------------------
+# Utility functions for summarization and analysis
+# --------------------------
+def chunk_text(text: str, max_tokens: int = 1200, overlap: int = 200):
+    encoder = tiktoken.get_encoding("cl100k_base")
+    tokens = encoder.encode(text)
+
+    chunks = []
+    start = 0
+
+    while start < len(tokens):
+        end = min(start + max_tokens, len(tokens))
+        chunk = encoder.decode(tokens[start:end])
+        chunks.append(chunk)
+        start += max_tokens - overlap
+
+    return chunks
+
+
+semaphore = asyncio.Semaphore(3)
+
+
+async def summarize_chunk(chunk: str, prompt: str):
+    async with semaphore:
+        return await safe_groq_call(
+            "You are a concise academic summarizer.",
+            f"{prompt}\n\nTEXT:\n{chunk}",
+            max_tokens=1024
+        )
+
+
+async def summarize_chunks(chunks: list[str], prompt: str):
+    tasks = [summarize_chunk(c, prompt) for c in chunks]
+    return await asyncio.gather(*tasks)
+
+
+async def merge_summaries(partials: list[str], prompt: str) -> str:
+    combined = "\n\n".join(partials)
+
+    result = await safe_groq_call(
+        "You are an expert academic summarizer.",
+        f"{prompt}\n\nCONTENT:\n{combined}",
+        max_tokens=2048
+    )
+    return result or ""
+
+# ──────────────────────────────────────
+# 0. Groq API Wrapper
+# ─────────────────────────────────────
+
+async def safe_groq_call(system, user, max_tokens=2048, retries=3):
+    delay = 1
+
+    for attempt in range(retries):
+        try:
+            return await _call_groq(system, user, max_tokens)
+        except Exception as e:
+            if attempt == retries - 1:
+                raise e  # final fail
+
+            await asyncio.sleep(delay)
+            delay *= 2  # exponential backoff
 
 async def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> str:
     """Generic Groq API call."""
@@ -28,7 +92,8 @@ async def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 409
             },
         )
         if response.status_code != 200:
-            raise RuntimeError(f"Groq API error: {response.status_code} - {response.text}")
+            raise RuntimeError(
+                f"Groq API error: {response.status_code} - {response.text}")
         return response.json()["choices"][0]["message"]["content"]
 
 
@@ -37,60 +102,26 @@ async def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 409
 # ──────────────────────────────────────
 
 async def generate_summary(transcript: str, format_type: str = "detailed") -> str:
-    """Generate summary in different formats."""
     prompts = {
-        "short": "Write a concise 3-5 sentence summary of this lecture. Be brief but cover all major points.",
-
-        "bullet": """Create a bullet-point summary of this lecture:
-- Use clear, concise bullet points
-- Group related points together
-- Include all key information
-- Use sub-bullets for details""",
-
-        "detailed": """Create a comprehensive structured summary:
-## 📋 Overview
-(2-3 sentence overview)
-## 🎯 Key Topics
-(list all major topics)
-## 📝 Detailed Summary
-(organized by topic with key points)
-## 💡 Key Takeaways
-(numbered list of important takeaways)
-## 📚 Important Terms
-(term: definition format)""",
-
-        "exam": """Create an exam-focused summary optimized for revision:
-## 🎯 Most Likely Exam Topics
-(rank by importance)
-## 📝 Key Concepts to Remember
-(concept + brief explanation)
-## ⚠️ Common Mistakes to Avoid
-(things students often get wrong)
-## 📊 Formulas/Rules/Laws
-(if applicable)
-## 💡 Quick Revision Points
-(one-line points for last-minute revision)""",
-
-        "concept": """Create a concept-level summary organized as a concept map:
-## Core Concept
-(main topic of the lecture)
-## Related Concepts
-### Concept 1
-- Definition
-- How it relates to core concept
-- Key properties
-### Concept 2
-(same format)
-## Concept Relationships
-(how concepts connect to each other)
-## Prerequisites
-(what you need to know before this)""",
+        "short": "Summarize briefly in 3-5 sentences.",
+        "bullet": "Summarize in bullet points.",
+        "detailed": "Create a structured academic summary with headings.",
+        "exam": "Create exam-focused notes.",
+        "concept": "Create a concept-based summary.",
     }
 
-    fmt = prompts.get(format_type, prompts["detailed"])
-    system = "You are an expert academic assistant creating lecture summaries. Use markdown formatting."
-    user = f"{fmt}\n\n---\nTRANSCRIPT:\n{transcript}"
-    return await _call_groq(system, user)
+    prompt = prompts.get(format_type, prompts["detailed"])
+
+    # STEP 1: chunk
+    chunks = chunk_text(transcript)
+
+    # STEP 2: parallel summaries
+    partials = await summarize_chunks(chunks, prompt)
+
+    # STEP 3: final merge
+    final = await merge_summaries([p for p in partials if p is not None], prompt)
+
+    return final or ""
 
 
 # ──────────────────────────────────────
@@ -114,7 +145,7 @@ Requirements:
 
 TRANSCRIPT:
 {transcript}"""
-    return await _call_groq(system, user)
+    return await safe_groq_call(system, user) or ""
 
 
 # ──────────────────────────────────────
@@ -140,7 +171,7 @@ async def extract_keywords(transcript: str) -> str:
 
 TRANSCRIPT:
 {transcript}"""
-    return await _call_groq(system, user)
+    return await safe_groq_call(system, user) or ""
 
 
 # ──────────────────────────────────────
@@ -194,7 +225,7 @@ Format each as:
     fmt = prompts.get(qtype, prompts["mixed"])
     system = "You are an expert exam paper setter creating questions from lecture content. Questions should test understanding, not just memory."
     user = f"{fmt}\n\nTRANSCRIPT:\n{transcript}"
-    return await _call_groq(system, user)
+    return await safe_groq_call(system, user) or ""
 
 
 # ──────────────────────────────────────
@@ -220,7 +251,7 @@ Make sure topics flow logically and cover the entire lecture.
 
 TRANSCRIPT:
 {transcript}"""
-    return await _call_groq(system, user)
+    return await safe_groq_call(system, user) or ""
 
 
 # ──────────────────────────────────────
@@ -251,7 +282,7 @@ For each item, quote the relevant text and explain why it's important.
 
 TRANSCRIPT:
 {transcript}"""
-    return await _call_groq(system, user)
+    return await safe_groq_call(system, user) or ""
 
 
 # ──────────────────────────────────────
@@ -284,5 +315,4 @@ Rules:
 - Do NOT add any extra content or explanations"""
 
     user = f"Translate the following to {lang_name}:\n\n{content}"
-    return await _call_groq(system, user, max_tokens=4096)
-
+    return await safe_groq_call(system, user, max_tokens=4096) or ""

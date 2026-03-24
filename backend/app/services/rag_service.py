@@ -154,7 +154,14 @@ async def generate_answer(question: str, context_chunks: list[str]) -> str:
 Answer questions based ONLY on the provided lecture context. 
 If the answer cannot be found in the context, say so clearly.
 Provide clear, detailed, and well-structured answers.
-Use bullet points and formatting where appropriate.""",
+Use bullet points and formatting where appropriate.
+
+STRICT RULES:
+- Use proper markdown headings (#, ##, ###)
+- DO NOT use ** for headings
+- Use bullet points (-)
+- Keep clean spacing
+""",
         },
         {
             "role": "user",

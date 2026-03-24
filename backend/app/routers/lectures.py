@@ -9,6 +9,7 @@ from app.services.document_extraction_service import extract_document_text
 from app.services.analysis_service import generate_summary
 from app.services.rag_service import process_lecture_for_rag
 from app.config import MAX_AUDIO_SIZE_MB, ALLOWED_MEDIA_TYPES
+import uuid
 
 router = APIRouter(prefix="/api/lectures", tags=["Lectures"])
 
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/api/lectures", tags=["Lectures"])
 DOC_EXTENSIONS = {"pdf", "docx", "pptx"}
 
 
-async def _process_lecture(lecture_id: str, audio_url: str, content_type: str, file_ext: str):
+async def _process_lecture(lecture_id: str, audio_url: str, file_ext: str):
     """
     Background task: transcribe audio, generate summary, create RAG index.
     Updates lecture status through each stage.
@@ -146,6 +147,61 @@ async def upload_lecture(
 
     return LectureResponse(**lecture_data)
 
+
+
+@router.post("/upload-url")
+async def get_upload_url(
+    title: str = Form(...),
+    filename: str = Form(...),
+    current_user: dict = Depends(get_current_user),
+):
+    supabase = get_supabase()
+
+    # Step 1: Create lecture record
+    lecture_result = supabase.table("lectures").insert({
+        "user_id": current_user["user_id"],
+        "title": title,
+        "status": "uploading",
+    }).execute()
+
+    lecture = lecture_result.data[0]
+    lecture_id = lecture["id"]
+
+    # Step 2: Generate file path
+    file_ext = filename.split(".")[-1]
+    storage_path = f"{current_user['user_id']}/{lecture_id}.{file_ext}"
+
+    # Step 3: Create signed upload URL
+    signed = supabase.storage.from_("lecture-audio").create_signed_upload_url(storage_path)
+
+    return {
+        "upload_url": signed["signed_url"],
+        "path": storage_path,
+        "lecture_id": lecture_id,
+    }
+
+@router.post("/confirm-upload")
+async def confirm_upload(
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+    lecture_id: str = Form(...),
+    path: str = Form(...),
+):
+    supabase = get_supabase()
+
+    # Get public URL
+    audio_url = supabase.storage.from_("lecture-audio").get_public_url(path)
+
+    # Update lecture
+    supabase.table("lectures").update({
+        "audio_url": audio_url,
+        "status": "transcribing",
+    }).eq("id", lecture_id).execute()
+
+    # Start processing
+    background_tasks.add_task(_process_lecture, lecture_id, audio_url, path.split(".")[-1])
+
+    return {"message": "Upload confirmed, processing started"}
 
 @router.get("", response_model=LectureListResponse)
 async def list_lectures(current_user: dict = Depends(get_current_user)):

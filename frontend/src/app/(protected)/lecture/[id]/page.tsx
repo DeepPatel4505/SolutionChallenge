@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { lecturesAPI, analysisAPI, chatAPI, exportAPI } from "@/lib/api";
 import { Lecture, TranscriptData, ChatMessage } from "@/types";
+import ReactMarkdown from "react-markdown";
 import {
     FileText, BarChart3, BookOpen, Key, HelpCircle, Layers, Zap, MessageSquare,
     Upload, Mic, Brain, CheckCircle2, Clock, ArrowLeft, Download,
@@ -33,27 +34,106 @@ function formatTimestamp(sec: number) {
 }
 
 function MarkdownRenderer({ content }: { content: string }) {
-    const lines = content.split("\n");
     return (
         <div className="markdown-content" style={{ animation: "fadeIn 0.4s ease" }}>
-            {lines.map((line, i) => {
-                const t = line.trim();
-                if (!t) return <br key={i} />;
-                if (t.startsWith("### ")) return <h3 key={i} style={{ animation: "slideInLeft 0.3s ease", animationDelay: `${Math.min(i * 0.02, 0.3)}s`, animationFillMode: "both" }}>{t.slice(4)}</h3>;
-                if (t.startsWith("## ")) return <h2 key={i} style={{ animation: "slideInLeft 0.3s ease", animationDelay: `${Math.min(i * 0.02, 0.3)}s`, animationFillMode: "both" }}>{t.slice(3)}</h2>;
-                if (t.startsWith("# ")) return <h2 key={i}>{t.slice(2)}</h2>;
-                if (t.startsWith("- **")) {
-                    const m = t.match(/^- \*\*(.+?)\*\*:?\s*(.*)/);
-                    if (m) return <li key={i} style={{ animation: "fadeIn 0.3s ease", animationDelay: `${Math.min(i * 0.015, 0.5)}s`, animationFillMode: "both" }}><strong>{m[1]}</strong>{m[2] ? `: ${m[2]}` : ""}</li>;
-                }
-                if (t.startsWith("- ")) return <li key={i} style={{ animation: "fadeIn 0.3s ease", animationDelay: `${Math.min(i * 0.015, 0.5)}s`, animationFillMode: "both" }}>{t.slice(2)}</li>;
-                if (/^\d+\.\s/.test(t)) return <li key={i}>{t.replace(/^\d+\.\s/, "")}</li>;
-                if (t.startsWith("> ")) return <blockquote key={i}>{t.slice(2)}</blockquote>;
-                if (t === "---") return <hr key={i} />;
-                if (t.startsWith("**") && t.endsWith("**")) return <p key={i}><strong>{t.slice(2, -2)}</strong></p>;
-                const rendered = t.replace(/\*\*(.+?)\*\*/g, '⟪$1⟫');
-                const parts = rendered.split(/⟪|⟫/);
-                return <p key={i}>{parts.map((part, j) => j % 2 === 1 ? <strong key={j}>{part}</strong> : part)}</p>;
+            <ReactMarkdown
+                components={{
+                    h1: ({ children }) => <h1 className="text-2xl font-bold mb-4">{children}</h1>,
+                    h2: ({ children }) => <h2 className="text-xl font-semibold mt-6 mb-3">{children}</h2>,
+                    h3: ({ children }) => <h3 className="text-lg font-medium mt-4 mb-2">{children}</h3>,
+                    p: ({ children }) => <p className="mb-3 text-gray-300">{children}</p>,
+                    li: ({ children }) => <li className="ml-4 list-disc mb-1">{children}</li>,
+                    strong: ({ children }) => <strong className="text-white font-semibold">{children}</strong>,
+                }}
+            >
+                {content}
+            </ReactMarkdown>
+        </div>
+    );
+}
+
+type Flashcard = {
+    front: string;
+    back: string;
+};
+
+function stripListPrefix(line: string) {
+    return line.replace(/^[-*]\s+/, "").replace(/^\d+[.)]\s+/, "").trim();
+}
+
+function parseFlashcards(content: string): Flashcard[] {
+    const normalized = content.replace(/\r/g, "").trim();
+    if (!normalized) return [];
+
+    const cards: Flashcard[] = [];
+    const blocks = normalized.split(/\n\s*\n+/);
+
+    blocks.forEach((block) => {
+        const cleaned = block
+            .replace(/^#{1,6}\s+/gm, "")
+            .replace(/\*\*/g, "")
+            .trim();
+
+        const qaMatch = cleaned.match(
+            /(?:^|\n)(?:Q(?:uestion)?|Front|Term|Prompt)\s*[:\-]\s*([\s\S]*?)(?:\n+)(?:A(?:nswer)?|Back|Definition|Response)\s*[:\-]\s*([\s\S]*)$/i,
+        );
+
+        if (qaMatch) {
+            const front = qaMatch[1].trim();
+            const back = qaMatch[2].trim();
+            if (front && back) cards.push({ front, back });
+            return;
+        }
+
+        const lines = cleaned.split("\n").map((line) => line.trim()).filter(Boolean);
+        if (lines.length >= 2) {
+            const first = stripListPrefix(lines[0]);
+            const second = stripListPrefix(lines[1]);
+            if (first && second) cards.push({ front: first, back: second });
+        }
+    });
+
+    return cards;
+}
+
+function FlashcardsRenderer({ content }: { content: string }) {
+    const cards = useMemo(() => parseFlashcards(content), [content]);
+    const [flipped, setFlipped] = useState<Record<string, boolean>>({});
+
+    const toggleFlip = (cardKey: string) => {
+        setFlipped((prev) => ({ ...prev, [cardKey]: !prev[cardKey] }));
+    };
+
+    if (cards.length === 0) {
+        return <MarkdownRenderer content={content} />;
+    }
+
+    return (
+        <div className="flashcards-grid" style={{ animation: "fadeIn 0.35s ease" }}>
+            {cards.map((card, index) => {
+                const cardKey = `${index}-${card.front.slice(0, 24)}`;
+                return (
+                <button
+                    key={cardKey}
+                    type="button"
+                    className={`flashcard ${flipped[cardKey] ? "is-flipped" : ""}`}
+                    onClick={() => toggleFlip(cardKey)}
+                    aria-label={`Flashcard ${index + 1}`}
+                >
+                    <span className="flashcard-inner">
+                        <span className="flashcard-face flashcard-front">
+                            <span className="flashcard-chip">Front</span>
+                            <span className="flashcard-content">{card.front}</span>
+                            <span className="flashcard-hint">Click to flip</span>
+                        </span>
+                        <span className="flashcard-face flashcard-back">
+                            <span className="flashcard-chip">Back</span>
+                            <span className="flashcard-content">{card.back}</span>
+                            <span className="flashcard-hint">Click to flip back</span>
+                        </span>
+                    </span>
+                </button>
+                );
             })}
         </div>
     );
@@ -508,7 +588,9 @@ export default function LectureDetailPage() {
                                     </div>
                                     <TranslateBar lectureId={lectureId} content={analysisCache[`questions_${questionType}`] || ""} translatedContent={activeTranslation ? translateCache[activeTranslation] : null} translating={translating} onTranslate={handleTranslate} onClear={() => setActiveTranslation(null)} />
                                     {analysisLoading === `questions_${questionType}` ? <AnalysisSkeleton /> : (
-                                        <MarkdownRenderer content={getDisplayContent(analysisCache[`questions_${questionType}`] || "Select a question type above.")} />
+                                        questionType === "flashcards"
+                                            ? <FlashcardsRenderer content={getDisplayContent(analysisCache[`questions_${questionType}`] || "Select a question type above.")} />
+                                            : <MarkdownRenderer content={getDisplayContent(analysisCache[`questions_${questionType}`] || "Select a question type above.")} />
                                     )}
                                 </div>
                             </div>
@@ -562,9 +644,15 @@ export default function LectureDetailPage() {
                                             <div key={msg.id} className={`chat-message chat-message-${msg.role}`} style={{ animation: "fadeIn 0.3s ease", animationDelay: `${i * 0.05}s`, animationFillMode: "both" }}>
                                                 <div className="chat-avatar">{msg.role === "user" ? <User size={16} /> : <Bot size={16} />}</div>
                                                 <div className="chat-bubble">
-                                                    {msg.content.split("\n").map((line, j) => (
-                                                        <span key={j}>{line}{j < msg.content.split("\n").length - 1 && <br />}</span>
-                                                    ))}
+                                                    {msg.role === "assistant" ? (
+                                                        <div className="chat-markdown">
+                                                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                                        </div>
+                                                    ) : (
+                                                        msg.content.split("\n").map((line, j) => (
+                                                            <span key={j}>{line}{j < msg.content.split("\n").length - 1 && <br />}</span>
+                                                        ))
+                                                    )}
                                                 </div>
                                             </div>
                                         ))

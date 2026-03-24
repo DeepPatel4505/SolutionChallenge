@@ -29,7 +29,7 @@ async def transcribe_audio(audio_url: str) -> dict:
         "paragraphs": "true",
     }
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with httpx.AsyncClient(timeout=600.0) as client:
         response = await client.post(
             DEEPGRAM_URL,
             headers={
